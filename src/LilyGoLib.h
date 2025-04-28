@@ -194,6 +194,7 @@ public:
     uint32_t getDeviceProbe();
 
     void disableBootDisplay();
+    void vibrate(uint16_t duration_ms);
     
 private:
 

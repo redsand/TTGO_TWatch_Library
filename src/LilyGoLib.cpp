@@ -129,7 +129,7 @@ bool LilyGoLib::begin(Stream *stream)
 
     if (bootDisplay) {
         fillScreen(TFT_BLACK);
-        drawString("Hello T-Watch", 120, 120);
+        drawString("Police Officer Scanner", 120, 120);
         setBrightness(50);
     }
 
@@ -814,7 +814,30 @@ bool LilyGoLib::factoryGPS()
     return true;
 }
 
+void LilyGoLib::vibrate(uint16_t duration_ms)
+{
+#if SENSORLIB_VERSION_MINOR > 2
+    SensorDRV2605::selectLibrary(1); 
+    SensorDRV2605::setMode(SensorDRV2605::MODE_INTTRIG);
+    SensorDRV2605::setWaveform(0, 15);  // Effect: strong click
+    SensorDRV2605::setWaveform(1, 0);   // End
+    SensorDRV2605::run();
+#else
+    SensorDRV2605::selectLibrary(1);
+    SensorDRV2605::setMode(DRV2605_MODE_INTTRIG);
+    SensorDRV2605::setWaveform(0, 15);
+    SensorDRV2605::setWaveform(1, 0);
+    SensorDRV2605::run();
+#endif
 
+    delay(duration_ms);
+
+#if SENSORLIB_VERSION_MINOR > 2
+    SensorDRV2605::stop();
+#else
+    SensorDRV2605::stop();
+#endif
+}
 
 LilyGoLib watch;
 
