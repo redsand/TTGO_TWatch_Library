@@ -122,7 +122,7 @@ void add_or_update_detection(SignalSource sig) {
 
 bool is_new_detection(const SignalSource& candidate) {
     for (int i = 0; i < detectionCtr; i++) {
-        if (lastDetections[i].source == candidate.source) {
+        if (lastDetections[i].source == candidate.source && lastDetections[i].uuid == candidate.uuid) {
             return false; // Already detected
         }
     }
@@ -555,8 +555,9 @@ void gps_diagnostics() {
 void radar_setup(LilyGoLib* watch) {
     _watch = watch;
     _watch->enableBLDO1();
-    GPSSerial.begin(38400, SERIAL_8N1, SHIELD_GPS_RX, SHIELD_GPS_TX);
-    
+    //GPSSerial.begin(38400, SERIAL_8N1, SHIELD_GPS_RX, SHIELD_GPS_TX);
+    gps_reset();
+
     compass_setup();
 }
 
