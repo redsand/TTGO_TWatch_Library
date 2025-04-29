@@ -7,12 +7,13 @@
 #include <FFat.h>
 
 static LilyGoLib* _watch;
-static std::vector<SignalSource> signals;
+//static std::vector<SignalSource> signals;
 static unsigned long last_scan_time = 0;
 static int detectionThreshold = -70;
 
-static SignalSource lastDetections[20];
+static SignalSource lastDetections[50];
 static int detectionIndex = 0;
+static int detectionCtr = 0;
 
 static lv_obj_t* radar_screen = nullptr;
 static lv_obj_t* battery_label = nullptr;
@@ -27,7 +28,7 @@ bool firstFix = true;
 unsigned long lastTouchTime = 0;
 bool screenOn = true;
 
-#define SCREEN_IDLE_TIMEOUT 60000  // 60 seconds
+#define SCREEN_IDLE_TIMEOUT 30000  // 30 seconds
 
 #ifndef GPSSerial
 #define GPSSerial Serial1
@@ -48,17 +49,44 @@ const unsigned long GPS_RESET_COOLDOWN = 5000; // Wait 5s after reset
 
 void gps_diagnostics();
 
+static int sweep_angle = 0;
+
+void draw_sweep() {
+    int cx = 105;
+    int cy = 105;
+    int radius = 100;
+
+    // Calculate end point based on sweep_angle
+    float angle_rad = radians(sweep_angle);
+    int x = cx + radius * cos(angle_rad);
+    int y = cy + radius * sin(angle_rad);
+
+    static lv_point_t line_points[2];
+    line_points[0].x = cx;
+    line_points[0].y = cy;
+    line_points[1].x = x;
+    line_points[1].y = y;
+
+    lv_obj_t* line = lv_line_create(radar_screen);
+    lv_line_set_points(line, line_points, 2);
+    lv_obj_set_style_line_color(line, lv_palette_main(LV_PALETTE_BLUE), LV_PART_MAIN);
+    lv_obj_set_style_line_width(line, 2, LV_PART_MAIN);
+    lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
+}
+
+
 void save_detection(const SignalSource& sig) {
     // Save into circular buffer
     lastDetections[detectionIndex] = sig;
-    detectionIndex = (detectionIndex + 1) % 20;
-
+    detectionIndex = (detectionIndex + 1) % 50;
+    detectionCtr++;
+    if(detectionCtr >= 50) detectionCtr = 50;
     // Append to FFat
     File f = FFat.open("/detections.log", FILE_APPEND);
     if (f) {
-        f.printf("%s,%s,%s,%d,%.6f,%.6f\n", 
-                 sig.type.c_str(), sig.source.c_str(), sig.deviceType.c_str(), 
-                 (int)sig.strength, sig.latitude, sig.longitude);
+        f.printf("%s,%s,%s,%s,%s,%d,%.6f,%.6f,%s\n", 
+                 sig.type.c_str(), sig.source.c_str(), sig.uuid.c_str(), sig.manufacturer.c_str(), sig.deviceType.c_str(), 
+                 (int)sig.strength, sig.latitude, sig.longitude, sig.extra.c_str());
         f.close();
     }
 }
@@ -67,8 +95,11 @@ void add_or_update_detection(SignalSource sig) {
     bool found = false;
 
     // Check existing in `signals`
-    for (auto& existing : signals) {
-        if (existing.source == sig.source && existing.type == sig.type) {
+    //for (auto& existing : signals) {
+    int i;
+    for(i=0; i < detectionCtr; i+=1) {
+        SignalSource existing = lastDetections[i];
+        if (existing.source == sig.source && existing.type == sig.type && existing.uuid == sig.uuid) {
             // Update existing signal with latest info
             existing.strength = sig.strength;
             existing.latitude = sig.latitude;
@@ -82,14 +113,15 @@ void add_or_update_detection(SignalSource sig) {
 
     if (!found) {
         // New device detected
+        Serial.println("New device detected: " + sig.source);
         _watch->vibrate(50);
         save_detection(sig);
-        signals.push_back(sig);
+        //signals.push_back(sig);
     }
 }
 
 bool is_new_detection(const SignalSource& candidate) {
-    for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < detectionCtr; i++) {
         if (lastDetections[i].source == candidate.source) {
             return false; // Already detected
         }
@@ -241,7 +273,7 @@ void update_current_heading() {
 
 // ---- MAC vendor mapping ----
 String lookupManufacturer(const String& mac) {
-    if (mac.startsWith("00:16:53") || mac.startsWith("70:88:6B") || mac.startsWith("00:25:DF") || mac.startsWith("0:58:28") || mac.startsWith("00:C0:D4")) return "Axon";         // Axon/Taser
+    if (mac.startsWith("00:16:53") || mac.startsWith("70:88:6B") || mac.startsWith("00:25:DF") || mac.startsWith("00:58:28") || mac.startsWith("00:C0:D4")) return "Axon";         // Axon/Taser
     if (mac.startsWith("B8:27:EB")) return "Reveal";
     if (mac.startsWith("00:1D:43")) return "Motorola";
     return "";
@@ -249,7 +281,7 @@ String lookupManufacturer(const String& mac) {
 
 String classifyDevice(String name) {
     name.toLowerCase();
-    if (name.startsWith("ydxj_") || name.indexOf("axon") != -1 || name.indexOf("ds-mcw405") != -1 || name.indexOf("vb400") != -1) return "Body Cam";
+    if (name.startsWith("ydxj_") || name.indexOf("axon") != -1 || name.indexOf("ds-mcw405") != -1 || name.indexOf("vb400") != -1 || name.indexOf("zednx") != -1) return "Body Cam";
     if (name.indexOf("taser") != -1 || name.indexOf("x2") != -1 || name.indexOf("x26") != -1) return "Taser";
     return "Unknown";
 }
@@ -263,7 +295,9 @@ void detectWiFi() {
         int32_t rssi = WiFi.RSSI(i);
         ssid.toLowerCase();
         String mfg = lookupManufacturer(bssid);
-        if (/*ssid.indexOf("bl4ck") != -1 ||*/ ssid.startsWith("ydxj_") || ssid.startsWith("ds-mcw405") || ssid.indexOf("axon") != -1 || ssid.indexOf("vb400") != -1 || ssid.indexOf("taser") != -1 || mfg.length() != 0) {
+        if ( ssid.startsWith("bl4ck") || ssid.startsWith("ydxj_") || ssid.startsWith("zednx") || ssid.startsWith("ds-mcw405") || ssid.indexOf("axon") != -1 || ssid.indexOf("vb400") != -1 || ssid.indexOf("taser") != -1 || mfg.length() != 0)
+        {
+
             SignalSource sig;
             sig.source = ssid;
             sig.strength = rssi;
@@ -277,8 +311,11 @@ void detectWiFi() {
             sig.longitude = currentLon;
             sig.manufacturer = mfg;
             sig.deviceType = classifyDevice(ssid);
+            sig.uuid = bssid;
+            sig.extra = String(WiFi.channel(i));
+            sig.extra += "|" + String(WiFi.encryptionType(i)) + "|" + String(WiFi.RSSI(i)); 
 
-            Serial.println("[WiFi] " + ssid + " (" + sig.manufacturer + ") detected");
+            Serial.println("[WiFi] " + ssid + " (" + sig.manufacturer + ") [" + sig.uuid + "] detected");
 
             add_or_update_detection(sig);
         }
@@ -286,17 +323,21 @@ void detectWiFi() {
 }
 
 class RadarBLEScan : public NimBLEAdvertisedDeviceCallbacks {
+    
     void onResult(NimBLEAdvertisedDevice* advertisedDevice) override {
         String name = advertisedDevice->getName().c_str();
         String address = advertisedDevice->getAddress().toString().c_str();
         int rssi = advertisedDevice->getRSSI();
         name.toLowerCase();
         String mfg = lookupManufacturer(address);
-        if ( name.startsWith("ydxj_") || name.indexOf("axon") != -1 || name.indexOf("vb400") != -1 || name.indexOf("taser") != -1 || mfg.length() != 0) {
+
+        if ( name.startsWith("ydxj") || name.indexOf("zednx") != -1 || name.indexOf("axon") != -1 || name.indexOf("vb400") != -1 || name.indexOf("taser") != -1 || mfg.length() != 0)
+        {
             SignalSource sig;
             sig.source = name;
             sig.strength = rssi;
             sig.type = "BLE";
+            sig.uuid = advertisedDevice->getAddress().toString().c_str();
             sig.detectedAt = millis();
             // sig.angle = currentHeading;
             if(currentHeading > 0)
@@ -307,27 +348,75 @@ class RadarBLEScan : public NimBLEAdvertisedDeviceCallbacks {
             sig.longitude = currentLon;
             sig.manufacturer = mfg;
             sig.deviceType = classifyDevice(name);
-            
-            Serial.println("[BLE] " + name + " (" + sig.manufacturer + ") detected");
+            sig.extra = advertisedDevice->getManufacturerData().c_str();
+            Serial.println("[BLE] " + name + " (" + sig.manufacturer + ") [" + sig.uuid + "] detected");
 
             add_or_update_detection(sig);
-        }
+        } else if (advertisedDevice->haveManufacturerData()) {
+            std::string mfgData = advertisedDevice->getManufacturerData();
+            if (mfgData.length() >= 2) {
+                uint16_t companyID = ((uint8_t)mfgData[1] << 8) | (uint8_t)mfgData[0];
+                bool detected = false;
+                String vendor = "Unknown";
+                String deviceType = "Unknown";
+                switch (companyID) {
+                    case 0x2E03: // Axon Enterprise
+                        vendor = "Axon";
+                        deviceType = "Body Camera / Taser";
+                        detected = true;
+                        break;
+                    case 0x03DE: // Reveal Media
+                        vendor = "Reveal Media";
+                        deviceType = "Body Camera";
+                        detected = true;
+                        break;
+                    case 0x000A: // Motorola
+                        vendor = "Motorola";
+                        deviceType = "Body Camera";
+                        detected = true;
+                        break;
+                    // Add more company IDs here!
+                }
+
+                if(detected) {
+                    SignalSource sig;
+                    sig.source = name;
+                    sig.uuid = advertisedDevice->getAddress().toString().c_str();
+                    sig.strength = rssi;
+                    sig.extra = advertisedDevice->getManufacturerData().c_str();
+                    sig.type = "BLE";
+                    sig.detectedAt = millis();
+                    // sig.angle = currentHeading;
+                    if(currentHeading > 0)
+                        sig.angle = currentHeading;
+                    else
+                        sig.angle = random(0, 360); // Default to 0 if heading is not available
+                    sig.latitude = currentLat;
+                    sig.longitude = currentLon;
+                    sig.manufacturer = mfg;
+                    sig.deviceType = classifyDevice(name);
+                    
+                    Serial.println("[BLE] " + name + " (" + sig.manufacturer + ") [" + sig.uuid + "] detected");
+
+                    add_or_update_detection(sig);
+                    // Save detection to FFat    
+                }
+            }
+        }    
     }
+
+
 };
 
 void detectBLE() {
     NimBLEScan* pScan = NimBLEDevice::getScan();
     pScan->setAdvertisedDeviceCallbacks(new RadarBLEScan(), false);
     pScan->setActiveScan(true);
-    pScan->start(3, false);
+    pScan->start(5, false);
 }
 
 // ---- Radar UI ----
 void draw_radar() {
-
-    //lv_init();
-
-    //fillScreen(TFT_BLACK);
 
     if (radar_screen == nullptr) {
         radar_screen = lv_obj_create(lv_scr_act());
@@ -365,7 +454,10 @@ void draw_radar() {
 
     // Serial.println("Drawing signals...");
     // Draw detected signals
-    for (auto& sig : signals) {
+    int i;
+    for(i=0; i < detectionCtr; i+=1) {
+    //for (auto& sig : signals) {
+        SignalSource sig = lastDetections[i];
         int strength_radius = map(sig.strength, -100, -30, radius, 0);
         strength_radius = constrain(strength_radius, 0, radius);
         float angle_rad = radians(sig.angle);
@@ -376,7 +468,7 @@ void draw_radar() {
         lv_obj_set_size(dot, 8, 8);
         lv_obj_align(dot, LV_ALIGN_CENTER, x - cx, y - cy);
         lv_obj_set_style_radius(dot, 4, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(dot, lv_color_black(), LV_PART_MAIN);
+        //lv_obj_set_style_bg_color(dot, lv_color_black(), LV_PART_MAIN);
         uint8_t normalized_strength = constrain(map(sig.strength, -100, -30, 255, 0), 0, 255);
         //Serial.printf("%s -> %d (%d) norm: %d", sig.source, sig.strength, strength_radius, normalized_strength);
         lv_color_t color;
@@ -386,10 +478,16 @@ void draw_radar() {
             color = lv_palette_main(LV_PALETTE_YELLOW);
         } else {
             color = lv_palette_main(LV_PALETTE_RED);
-            _watch->vibrate(50);  // Vibrate for high signal strength
+            //_watch->vibrate(50);  // Vibrate for high signal strength
         }
         lv_obj_set_style_bg_color(dot, color, LV_PART_MAIN);
-        String label_text = sig.source + " (" + sig.deviceType + ")";
+        String label_text;
+        if(sig.source.length() > 0) label_text +=  sig.source;
+        else label_text += "?";
+        if(sig.manufacturer.length() > 0) label_text += " (" + sig.manufacturer + ")";
+        if(sig.deviceType.length() > 0) label_text += " [" + sig.deviceType + "]";
+
+
         lv_obj_t* label = lv_label_create(radar_screen);
         lv_label_set_text(label, label_text.c_str());
         lv_obj_align_to(label, dot, LV_ALIGN_OUT_RIGHT_MID, 2, 0);  // Align text to right of dot
@@ -411,6 +509,7 @@ void draw_radar() {
     // Position near battery icon
     //lv_obj_set_pos(gps_icon, 1, 5);  // Adjust X/Y position if needed
     lv_obj_align(gps_icon, LV_ALIGN_TOP_LEFT, 1, 0);
+
 
 }
 
@@ -463,11 +562,11 @@ void radar_loop(LilyGoLib* watch) {
     _watch = watch;
 
    
-    if (last_scan_time == 0 || millis() - last_scan_time > 5000) {
+    if (last_scan_time == 0 || millis() - last_scan_time > 8000) {
         if (GPSSerial.available() > 0) {
             gps.encode(GPSSerial.read());
         }
-        signals.clear();
+        //signals.clear();
         
         //Serial.println("Updating heading.\n");
         update_current_heading();
@@ -475,7 +574,7 @@ void radar_loop(LilyGoLib* watch) {
         //Serial.println("Radar BLE.");
         detectBLE();
 
-        if ( !screenOn && digitalRead(16) == LOW) {
+        if ( !screenOn && ( digitalRead(16) == LOW || digitalRead(0) == LOW)) {
             _watch->setBrightness(80);
             lastTouchTime = millis();
             screenOn = true;
@@ -483,17 +582,24 @@ void radar_loop(LilyGoLib* watch) {
         //Serial.println("Detect wifi.");
         detectWiFi();
         
-        if ( !screenOn && digitalRead(16) == LOW) {
+        if ( !screenOn && ( digitalRead(16) == LOW || digitalRead(0) == LOW)) {
             _watch->setBrightness(80);
             lastTouchTime = millis();
             screenOn = true;
         }
 
-        //Serial.println("Draw radar.");
         draw_radar();
-        
+      
         //Serial.println("Completed.");
         last_scan_time = millis();
+    }
+
+
+    if(millis() - lastTouchTime % 1000) {
+        //Serial.println("Draw radar.");            
+        // Then inside radar_loop() after drawing radar:
+        sweep_angle = (sweep_angle + 5) % 360; // Adjust speed here
+        draw_sweep(); // Draw the radar sweep line
     }
 
     lv_timer_handler();
@@ -503,17 +609,10 @@ void radar_loop(LilyGoLib* watch) {
         _watch->setBrightness(0);
         screenOn = false;
     }
-
-    /*
-    if ( digitalRead(0) == LOW) {
-        Serial.println("Button pressed!\n");
-    }
-    */
-  
     
-    if ( digitalRead(16) == LOW) {
+    if ( digitalRead(16) == LOW || digitalRead(0) == LOW) {
         lastTouchTime = millis();
-        if (!screenOn) {
+        /*if (!screenOn)*/ {
             _watch->setBrightness(80);
             lastTouchTime = millis();
             screenOn = true;

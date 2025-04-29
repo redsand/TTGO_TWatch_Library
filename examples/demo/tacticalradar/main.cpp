@@ -57,7 +57,7 @@ void setup() {
     watch.begin(NULL); 
     beginLvglHelper(false);
 
-    pinMode(BUTTON_PIN, INPUT_PULLUP); 
+    // pinMode(BUTTON_PIN, INPUT_PULLUP); 
     pinMode(16, INPUT_PULLUP); 
 
     WiFi.mode(WIFI_OFF);    // Save battery

@@ -7,6 +7,7 @@
 // Structure to represent a detected signal
 struct SignalSource {
     String source;        // SSID or BLE name
+    String uuid;         // mac or ble address
     float strength;       // RSSI
     String type;          // "WiFi" or "BLE"
     unsigned long detectedAt;  // millis() timestamp
@@ -15,6 +16,7 @@ struct SignalSource {
     double longitude;
     String manufacturer;  // Manufacturer detected (from MAC if available)
     String deviceType;    // "Body Cam" or "Taser" or other
+    String extra;         // Extra data from BLE or WiFi
 };
 
 // Exposed Functions
