@@ -265,7 +265,7 @@ void update_current_heading() {
         currentHeading = read_compass_heading();
     } else { 
         Serial.println("No GPS or Compass available.");
-        gps_diagnostics();
+        // gps_diagnostics();
     }
 
     if(currentHeading > 0)
