@@ -26,8 +26,22 @@ void handle_serial_command(String cmd) {
         Serial.println("\n=== Log End ===");
         f.close();
     } 
+    else if (cmd == "unknown") {
+        File f = FFat.open("/unknown_devices.log", FILE_READ);
+        if (!f) {
+            Serial.println("[ERROR] Cannot open log file.");
+            return;
+        }
+        Serial.println("=== Log Start ===");
+        while (f.available()) {
+            Serial.write(f.read());
+        }
+        Serial.println("\n=== Log End ===");
+        f.close();
+    } 
     else if (cmd == "clear") {
         FFat.remove("/detections.log");
+        FFat.remove("/unknown_devices.log");
         Serial.println("[OK] Log file cleared.");
     } 
     else if (cmd == "restart") {
@@ -37,7 +51,7 @@ void handle_serial_command(String cmd) {
     }
     else if (cmd == "help") {
         Serial.println("[Commands Available]");
-        //Serial.println(" settings  - Open settings screen");
+        Serial.println(" unknown   - Print unknown devices");
         Serial.println(" log       - Print detection log");
         Serial.println(" clear     - Clear detection log");
         Serial.println(" restart   - Restart device");
@@ -48,17 +62,18 @@ void handle_serial_command(String cmd) {
     }
 }
 
-#define BUTTON_PIN 0 
 
 void setup() {
+
+    pinMode(BUTTON_PIN, INPUT_PULLUP); 
+    
     Serial.begin(115200);
     Serial.println("Booting Watch...");
 
     watch.begin(NULL); 
     beginLvglHelper(false);
 
-    // pinMode(BUTTON_PIN, INPUT_PULLUP); 
-    pinMode(16, INPUT_PULLUP); 
+    pinMode(BOARD_TOUCH_INT, INPUT_PULLUP); 
 
     WiFi.mode(WIFI_OFF);    // Save battery
     NimBLEDevice::init(""); // BLE initialized

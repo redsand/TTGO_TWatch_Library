@@ -4,6 +4,8 @@
 #include <Arduino.h>
 #include <LilyGoLib.h>
 
+#define BUTTON_PIN 0 
+
 // Structure to represent a detected signal
 struct SignalSource {
     String source;        // SSID or BLE name

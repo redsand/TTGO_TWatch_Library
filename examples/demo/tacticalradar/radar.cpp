@@ -5,15 +5,19 @@
 #include <TinyGPSPlus.h>
 #include <QMC5883LCompass.h>
 #include <FFat.h>
+#include <set>
 
 static LilyGoLib* _watch;
-//static std::vector<SignalSource> signals;
+
 static unsigned long last_scan_time = 0;
 static int detectionThreshold = -70;
 
 static SignalSource lastDetections[50];
 static int detectionIndex = 0;
 static int detectionCtr = 0;
+
+bool loggingUnknowns = false;
+static std::set<String> unknownDeviceKeys;
 
 static lv_obj_t* radar_screen = nullptr;
 static lv_obj_t* battery_label = nullptr;
@@ -52,8 +56,8 @@ void gps_diagnostics();
 static int sweep_angle = 0;
 
 void draw_sweep() {
-    int cx = 105;
-    int cy = 105;
+    int cx = 106;
+    int cy = 106;
     int radius = 100;
 
     // Calculate end point based on sweep_angle
@@ -98,14 +102,21 @@ void add_or_update_detection(SignalSource sig) {
     //for (auto& existing : signals) {
     int i;
     for(i=0; i < detectionCtr; i+=1) {
-        SignalSource existing = lastDetections[i];
-        if (existing.source == sig.source && existing.type == sig.type && existing.uuid == sig.uuid) {
+        SignalSource *existing = &lastDetections[i];
+        if (existing->source == sig.source && existing->type == sig.type && existing->uuid == sig.uuid) {
             // Update existing signal with latest info
-            existing.strength = sig.strength;
-            existing.latitude = sig.latitude;
-            existing.longitude = sig.longitude;
-            existing.angle = sig.angle;
-            existing.detectedAt = millis();
+            uint8_t normalized_strength = constrain(map(sig.strength, -100, -30, 255, 0), 0, 255);
+            uint8_t prev_normalized_strength = constrain(map(existing->strength, -100, -30, 255, 0), 0, 255);
+            
+            if (normalized_strength <= 85 && prev_normalized_strength > 85) {
+                Serial.println("Signal strength dropped below threshold: " + sig.source);
+                _watch->vibrate(50);
+            }
+
+            existing->strength = sig.strength;
+            existing->latitude = sig.latitude;
+            existing->longitude = sig.longitude;
+            existing->detectedAt = millis();
             found = true;
             break;
         }
@@ -116,17 +127,7 @@ void add_or_update_detection(SignalSource sig) {
         Serial.println("New device detected: " + sig.source);
         _watch->vibrate(50);
         save_detection(sig);
-        //signals.push_back(sig);
     }
-}
-
-bool is_new_detection(const SignalSource& candidate) {
-    for (int i = 0; i < detectionCtr; i++) {
-        if (lastDetections[i].source == candidate.source && lastDetections[i].uuid == candidate.uuid) {
-            return false; // Already detected
-        }
-    }
-    return true; // New device
 }
 
 void compass_setup() {
@@ -221,41 +222,6 @@ void gps_update() {
         gpsLastResetAttempt = millis();
     }
 }
-/*
-void gps_update() {
-    if (gps.speed.isValid() && gps.speed.kmph() > 1.0) { // Moving at least 1 km/h
-        if (gps.course.isValid()) {
-            currentHeading = gps.course.deg();
-            Serial.printf("GPS Heading: %.2f degrees\n", currentHeading);
-        }
-    } else {
-     
-      if (gps.location.isValid()) {
-        Serial.println("GPS Location: " + String(gps.location.lat(), 6) + ", " + String(gps.location.lng(), 6));
-        double lat = gps.location.lat();
-        double lon = gps.location.lng();
-
-        if (!firstFix) {
-            double dLon = radians(lon - lastLon);
-            double lat1 = radians(lastLat);
-            double lat2 = radians(lat);
-
-            float y = sin(dLon) * cos(lat2);
-            float x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
-
-            float heading = atan2(y, x) * 180.0 / PI;
-            if (heading < 0) heading += 360.0;
-            currentHeading = heading;
-
-            
-        }
-
-        lastLat = currentLat = lat;
-        lastLon = currentLon = lon;
-        firstFix = false;
-      } else Serial.println("GPS Location invalid.");
-    } 
-}*/
 
 void update_current_heading() {
     if (gps.location.isValid()) {
@@ -265,7 +231,7 @@ void update_current_heading() {
         currentHeading = read_compass_heading();
     } else { 
         Serial.println("No GPS or Compass available.");
-        // gps_diagnostics();
+        //gps_diagnostics();
     }
 
     if(currentHeading > 0)
@@ -320,6 +286,21 @@ void detectWiFi() {
             Serial.println("[WiFi] " + ssid + " (" + sig.manufacturer + ") [" + sig.uuid + "] detected");
 
             add_or_update_detection(sig);
+        } else if(loggingUnknowns) {
+            String uniqueKey = "WiFi:" + bssid; 
+            if (unknownDeviceKeys.find(uniqueKey) == unknownDeviceKeys.end()) {
+                unknownDeviceKeys.insert(uniqueKey);
+        
+                File f = FFat.open("/unknown_devices.log", FILE_APPEND);
+                if (f) {
+                    String extra = String(WiFi.channel(i));
+                    extra += "|" + String(WiFi.encryptionType(i)) + "|" + String(WiFi.RSSI(i));
+                    f.printf("%s,%s,%s,%d,%.6f,%.6f,%s\n", "WiFi", ssid, bssid,
+                             (int)rssi, currentLat, currentLon,extra);
+                    f.close();
+                }
+                Serial.println("[LOG] Unknown device recorded: " + ssid);
+            }
         }
     }
 }
@@ -404,9 +385,21 @@ class RadarBLEScan : public NimBLEAdvertisedDeviceCallbacks {
                     // Save detection to FFat    
                 }
             }
-        }    
+        } else if(loggingUnknowns) {
+            String addrStr = String(advertisedDevice->getAddress().toString().c_str());
+            String uniqueKey = "BLE:" + addrStr;
+            unknownDeviceKeys.insert(uniqueKey);
+        
+            File f = FFat.open("/unknown_devices.log", FILE_APPEND);
+            if (f) {
+                    String extra = advertisedDevice->getManufacturerData().c_str();
+                    f.printf("%s,%s,%s,%d,%.6f,%.6f,%s\n", "WiFi", name, advertisedDevice->getAddress().toString().c_str(),
+                             (int)rssi, currentLat, currentLon, extra);
+                    f.close();
+            }
+            Serial.println("[LOG] Unknown device recorded: " + name);
+        }   
     }
-
 
 };
 
@@ -416,6 +409,39 @@ void detectBLE() {
     pScan->setActiveScan(true);
     pScan->start(5, false);
 }
+
+void apply_pulse_animation(lv_obj_t* dot, lv_color_t color) {
+    // Base shadow style
+    lv_obj_set_style_shadow_color(dot, color, LV_PART_MAIN);
+    lv_obj_set_style_shadow_opa(dot, LV_OPA_50, LV_PART_MAIN);
+    lv_obj_set_style_shadow_spread(dot, 0, LV_PART_MAIN);
+    
+    // Create animation
+    static lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, dot);
+    lv_anim_set_exec_cb(&a, [](void* obj, int32_t val) {
+        lv_obj_set_style_shadow_width((lv_obj_t*)obj, val, LV_PART_MAIN);
+    });
+    lv_anim_set_time(&a, 800);           // One pulse cycle duration
+    lv_anim_set_playback_time(&a, 800);  // Reverse duration
+    lv_anim_set_values(&a, 4, 12);       // Glow size range
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&a);
+}
+
+void toggleLoggingMode() {
+    loggingUnknowns = !loggingUnknowns;
+    if (loggingUnknowns) {
+        Serial.println("[LOGGING] Logging unknowns ENABLED");
+        _watch->vibrate(100);
+    } else {
+        Serial.println("[LOGGING] Logging unknowns DISABLED");
+        _watch->vibrate(100);
+    }
+}
+
+lv_obj_t *logging_icon = nullptr;
 
 // ---- Radar UI ----
 void draw_radar() {
@@ -466,13 +492,26 @@ void draw_radar() {
         int x = cx + strength_radius * cos(angle_rad);
         int y = cy + strength_radius * sin(angle_rad);
 
+        unsigned long age = millis() - sig.detectedAt;
+        const unsigned long max_age = 60000; // 30 seconds before fading to nearly invisible
+        uint8_t opacity = LV_OPA_COVER;
+
+        
+        /*if (age > max_age) continue;  // Skip very old detections
+        else*/ if (age > 30000)         // Between 15s and 30s: fade from 255 to ~60
+            opacity = map(age, 15000, max_age, LV_OPA_80, LV_OPA_30);
+
+            // Dot
         lv_obj_t* dot = lv_obj_create(radar_screen);
-        lv_obj_set_size(dot, 8, 8);
+        lv_obj_set_size(dot, 10, 10);
         lv_obj_align(dot, LV_ALIGN_CENTER, x - cx, y - cy);
-        lv_obj_set_style_radius(dot, 4, LV_PART_MAIN);
-        //lv_obj_set_style_bg_color(dot, lv_color_black(), LV_PART_MAIN);
+        lv_obj_set_style_radius(dot, 5, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(dot, opacity, LV_PART_MAIN);  // <-- Fading effect
+        lv_obj_set_style_border_width(dot, 2, LV_PART_MAIN);
+        //lv_obj_set_style_shadow_width(dot, 0, LV_PART_MAIN);
+        lv_obj_set_style_outline_width(dot, 0, LV_PART_MAIN);
+
         uint8_t normalized_strength = constrain(map(sig.strength, -100, -30, 255, 0), 0, 255);
-        //Serial.printf("%s -> %d (%d) norm: %d", sig.source, sig.strength, strength_radius, normalized_strength);
         lv_color_t color;
         if (normalized_strength > 170) {
             color = lv_palette_main(LV_PALETTE_GREEN);
@@ -480,14 +519,17 @@ void draw_radar() {
             color = lv_palette_main(LV_PALETTE_YELLOW);
         } else {
             color = lv_palette_main(LV_PALETTE_RED);
-            //_watch->vibrate(50);  // Vibrate for high signal strength
         }
-        lv_obj_set_style_bg_color(dot, color, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(dot, color, LV_PART_MAIN);   
+        lv_obj_set_style_border_color(dot, color, LV_PART_MAIN);
+        apply_pulse_animation(dot, color);
+
         String label_text;
         if(sig.source.length() > 0) label_text +=  sig.source;
         else label_text += "?";
-        if(sig.manufacturer.length() > 0) label_text += " (" + sig.manufacturer + ")";
-        if(sig.deviceType.length() > 0) label_text += " [" + sig.deviceType + "]";
+        if(sig.manufacturer.length() > 0 && !sig.manufacturer.equals("Unknown")) label_text += " (" + sig.manufacturer + ")";
+        if(sig.deviceType.length() > 0 && !sig.deviceType.equals("Unknown")) label_text += " [" + sig.deviceType + "]";
+        if(sig.type.length() > 0) label_text += " (" + sig.type + ")";
 
 
         lv_obj_t* label = lv_label_create(radar_screen);
@@ -495,6 +537,7 @@ void draw_radar() {
         lv_obj_align_to(label, dot, LV_ALIGN_OUT_RIGHT_MID, 2, 0);  // Align text to right of dot
         lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
         lv_obj_set_style_text_font(label, &lv_font_montserrat_12, LV_PART_MAIN);
+        lv_obj_set_style_text_opa(label, opacity, LV_PART_MAIN);
     }
 
         // === GPS Icon ===
@@ -511,7 +554,20 @@ void draw_radar() {
     // Position near battery icon
     //lv_obj_set_pos(gps_icon, 1, 5);  // Adjust X/Y position if needed
     lv_obj_align(gps_icon, LV_ALIGN_TOP_LEFT, 1, 0);
+    
+    
+    Serial.println("Creating logging icon");
+    logging_icon = lv_label_create(radar_screen);
+    
+    lv_label_set_text(logging_icon, LV_SYMBOL_EDIT); // example symbol
+    lv_obj_add_flag(logging_icon, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align_to(logging_icon, gps_icon, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
 
+    if (loggingUnknowns) {
+        lv_obj_set_style_text_color(logging_icon, lv_palette_main(LV_PALETTE_RED), LV_PART_MAIN);
+    } else {
+        lv_obj_set_style_text_color(logging_icon, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    }
 
 }
 
@@ -552,6 +608,12 @@ void gps_diagnostics() {
     Serial.println("=== End GPS Diagnostic ===\n");
 }
 
+unsigned long lastTouchTimeForSequence = 0;
+int touchCount = 0;
+const int REQUIRED_TOUCHES = 5;
+const unsigned long TOUCH_SEQUENCE_TIMEOUT = 2000; // 2 seconds
+
+
 void radar_setup(LilyGoLib* watch) {
     _watch = watch;
     _watch->enableBLDO1();
@@ -561,6 +623,7 @@ void radar_setup(LilyGoLib* watch) {
     compass_setup();
 }
 
+
 void radar_loop(LilyGoLib* watch) {
     _watch = watch;
 
@@ -568,10 +631,9 @@ void radar_loop(LilyGoLib* watch) {
     if (GPSSerial.available() > 0) {
         gps.encode(GPSSerial.read());
     }
-   
+
     if (last_scan_time == 0 || millis() - last_scan_time > 8000) {
         
-        //signals.clear();
         
         //Serial.println("Updating heading.\n");
         update_current_heading();
@@ -579,7 +641,7 @@ void radar_loop(LilyGoLib* watch) {
         //Serial.println("Radar BLE.");
         detectBLE();
 
-        if ( !screenOn && ( digitalRead(16) == LOW || digitalRead(0) == LOW)) {
+        if ( !screenOn && ( digitalRead(BOARD_TOUCH_INT) == LOW )) {
             _watch->setBrightness(80);
             lastTouchTime = millis();
             screenOn = true;
@@ -587,7 +649,7 @@ void radar_loop(LilyGoLib* watch) {
         //Serial.println("Detect wifi.");
         detectWiFi();
         
-        if ( !screenOn && ( digitalRead(16) == LOW || digitalRead(0) == LOW)) {
+        if ( !screenOn && ( digitalRead(BOARD_TOUCH_INT) == LOW )) {
             _watch->setBrightness(80);
             lastTouchTime = millis();
             screenOn = true;
@@ -599,10 +661,7 @@ void radar_loop(LilyGoLib* watch) {
         last_scan_time = millis();
     }
 
-
-    if(millis() - lastTouchTime % 1000) {
-        //Serial.println("Draw radar.");            
-        // Then inside radar_loop() after drawing radar:
+    if(millis() - lastTouchTime % 4000) {
         sweep_angle = (sweep_angle + 5) % 360; // Adjust speed here
         draw_sweep(); // Draw the radar sweep line
     }
@@ -610,18 +669,55 @@ void radar_loop(LilyGoLib* watch) {
     lv_timer_handler();
 
     if (millis() - lastTouchTime > SCREEN_IDLE_TIMEOUT && screenOn) {  
-        //Serial.println("Turning off brightness\n");
+        Serial.println("Turning off brightness\n");
         _watch->setBrightness(0);
         screenOn = false;
     }
     
-    if ( digitalRead(16) == LOW || digitalRead(0) == LOW) {
+    if ( digitalRead(BOARD_TOUCH_INT) == LOW ) {
+ /*
+        Serial.println("Touch");
         lastTouchTime = millis();
-        /*if (!screenOn)*/ {
+        if (!screenOn) {
             _watch->setBrightness(80);
             lastTouchTime = millis();
             screenOn = true;
         }
+*/
+        unsigned long now = millis();
+
+        if (now - lastTouchTimeForSequence > TOUCH_SEQUENCE_TIMEOUT) {
+            // Too long since last touch, reset sequence
+            touchCount = 0;
+        }
+
+        touchCount++;
+        lastTouchTimeForSequence = now;
+
+        Serial.printf("Touch count: %d\n", touchCount);
+
+        if (touchCount >= REQUIRED_TOUCHES) {
+            toggleLoggingMode();
+            if (loggingUnknowns) {
+                lv_obj_set_style_text_color(logging_icon, lv_palette_main(LV_PALETTE_RED), LV_PART_MAIN);
+            } else {
+                lv_obj_set_style_text_color(logging_icon, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+            }
+            touchCount = 0; // Reset sequence
+        }
+
+        // Refresh screen-on timer
+        lastTouchTime = millis();
+        if (!screenOn) {
+            _watch->setBrightness(80);
+            screenOn = true;
+        }
+    }
+    
+    if (digitalRead(BUTTON_PIN) == LOW) {  // Falling edge
+        Serial.printf("Unknown logging mode: %s\n", loggingUnknowns ? "ENABLED" : "DISABLED");
+        loggingUnknowns = !loggingUnknowns;
+        _watch->vibrate(50);
     }
 
 }
