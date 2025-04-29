@@ -166,6 +166,7 @@ void gps_reset() {
 // ---- GPS ----
 
 void gps_update() {
+    /*
     bool gotNewData = false;
 
     while (GPSSerial.available()) {
@@ -173,8 +174,9 @@ void gps_update() {
         gps.encode(c);
         gotNewData = true;
     }
+    */
 
-    if (gotNewData) {
+    if (gps.location.isValid()) {
         lastGpsDataTime = millis(); // We received something
         gpsConnected = true;
 
@@ -560,6 +562,8 @@ void radar_setup(LilyGoLib* watch) {
 
 void radar_loop(LilyGoLib* watch) {
     _watch = watch;
+
+    
     if (GPSSerial.available() > 0) {
         gps.encode(GPSSerial.read());
     }
