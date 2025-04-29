@@ -32,6 +32,8 @@ bool firstFix = true;
 unsigned long lastTouchTime = 0;
 bool screenOn = true;
 
+const size_t MAX_LOG_SIZE = 400 * 1024; // 400 KB max log size
+
 #define SCREEN_IDLE_TIMEOUT 30000  // 30 seconds
 
 #ifndef GPSSerial
@@ -85,9 +87,21 @@ void save_detection(const SignalSource& sig) {
     detectionIndex = (detectionIndex + 1) % 50;
     detectionCtr++;
     if(detectionCtr >= 50) detectionCtr = 50;
+
+
+
+
     // Append to FFat
     File f = FFat.open("/detections.log", FILE_APPEND);
     if (f) {
+        if (f.size() > MAX_LOG_SIZE) {
+            f.close();
+            Serial.println("[LOG] Log file too big, truncating...");
+
+            FFat.remove("/detections.log"); // delete old
+            f = FFat.open("/detections.log", FILE_WRITE); // start fresh
+        }
+
         f.printf("%s,%s,%s,%s,%s,%d,%.6f,%.6f,%s\n", 
                  sig.type.c_str(), sig.source.c_str(), sig.uuid.c_str(), sig.manufacturer.c_str(), sig.deviceType.c_str(), 
                  (int)sig.strength, sig.latitude, sig.longitude, sig.extra.c_str());
@@ -293,11 +307,21 @@ void detectWiFi() {
         
                 File f = FFat.open("/unknown_devices.log", FILE_APPEND);
                 if (f) {
+                    if (f.size() > MAX_LOG_SIZE) {
+                        f.close();
+                        Serial.println("[LOG] Log file too big, truncating...");
+            
+                        FFat.remove("/unknown_devices.log"); // delete old
+                        f = FFat.open("/unknown_devices.log", FILE_WRITE); // start fresh
+                    }
+
+                    
                     String extra = String(WiFi.channel(i));
                     extra += "|" + String(WiFi.encryptionType(i)) + "|" + String(WiFi.RSSI(i));
                     f.printf("%s,%s,%s,%d,%.6f,%.6f,%s\n", "WiFi", ssid, bssid,
                              (int)rssi, currentLat, currentLon,extra);
                     f.close();
+                    _watch->vibrate(30);
                 }
                 Serial.println("[LOG] Unknown device recorded: " + ssid);
             }
@@ -392,10 +416,20 @@ class RadarBLEScan : public NimBLEAdvertisedDeviceCallbacks {
         
             File f = FFat.open("/unknown_devices.log", FILE_APPEND);
             if (f) {
-                    String extra = advertisedDevice->getManufacturerData().c_str();
-                    f.printf("%s,%s,%s,%d,%.6f,%.6f,%s\n", "WiFi", name, advertisedDevice->getAddress().toString().c_str(),
-                             (int)rssi, currentLat, currentLon, extra);
+                if (f.size() > MAX_LOG_SIZE) {
                     f.close();
+                    Serial.println("[LOG] Log file too big, truncating...");
+        
+                    FFat.remove("/unknown_devices.log"); // delete old
+                    f = FFat.open("/unknown_devices.log", FILE_WRITE); // start fresh
+                }
+
+                String extra = advertisedDevice->getManufacturerData().c_str();
+                f.printf("%s,%s,%s,%d,%.6f,%.6f,%s\n", "WiFi", name, advertisedDevice->getAddress().toString().c_str(),
+                             (int)rssi, currentLat, currentLon, extra);
+                f.close();
+                
+                _watch->vibrate(30);
             }
             Serial.println("[LOG] Unknown device recorded: " + name);
         }   
