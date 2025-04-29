@@ -560,12 +560,12 @@ void radar_setup(LilyGoLib* watch) {
 
 void radar_loop(LilyGoLib* watch) {
     _watch = watch;
-
+    if (GPSSerial.available() > 0) {
+        gps.encode(GPSSerial.read());
+    }
    
     if (last_scan_time == 0 || millis() - last_scan_time > 8000) {
-        if (GPSSerial.available() > 0) {
-            gps.encode(GPSSerial.read());
-        }
+        
         //signals.clear();
         
         //Serial.println("Updating heading.\n");
