@@ -270,60 +270,65 @@ String classifyDevice(String name) {
 
 // ---- Detection ----
 void detectWiFi() {
-    int n = WiFi.scanNetworks();
-    for (int i = 0; i < n; ++i) {
-        String ssid = WiFi.SSID(i);
-        String bssid = WiFi.BSSIDstr();
-        int32_t rssi = WiFi.RSSI(i);
-        ssid.toLowerCase();
-        String mfg = lookupManufacturer(bssid);
-        if ( ssid.startsWith("bl4ck") || ssid.startsWith("ydxj_") || ssid.startsWith("zednx") || ssid.startsWith("ds-mcw405") || ssid.indexOf("axon") != -1 || ssid.indexOf("vb400") != -1 || ssid.indexOf("taser") != -1 || mfg.length() != 0)
-        {
+    //int n = WiFi.scanNetworks();
+    int n = WiFi.scanComplete();
+    if (n != WIFI_SCAN_RUNNING) {
+    // scan finished, process results
 
-            SignalSource sig;
-            sig.source = ssid;
-            sig.strength = rssi;
-            sig.type = "WiFi";
-            sig.detectedAt = millis();
-            if(currentHeading > 0)
-                sig.angle = currentHeading;
-            else
-                sig.angle = random(0, 360); // Default to 0 if heading is not available
-            sig.latitude = currentLat;
-            sig.longitude = currentLon;
-            sig.manufacturer = mfg;
-            sig.deviceType = classifyDevice(ssid);
-            sig.uuid = bssid;
-            sig.extra = String(WiFi.channel(i));
-            sig.extra += "|" + String(WiFi.encryptionType(i)) + "|" + String(WiFi.RSSI(i)); 
+        for (int i = 0; i < n; ++i) {
+            String ssid = WiFi.SSID(i);
+            String bssid = WiFi.BSSIDstr();
+            int32_t rssi = WiFi.RSSI(i);
+            ssid.toLowerCase();
+            String mfg = lookupManufacturer(bssid);
+            if ( ssid.startsWith("bl4ck") || ssid.startsWith("ydxj_") || ssid.startsWith("zednx") || ssid.startsWith("ds-mcw405") || ssid.indexOf("axon") != -1 || ssid.indexOf("vb400") != -1 || ssid.indexOf("taser") != -1 || mfg.length() != 0)
+            {
 
-            Serial.println("[WiFi] " + ssid + " (" + sig.manufacturer + ") [" + sig.uuid + "] detected");
+                SignalSource sig;
+                sig.source = ssid;
+                sig.strength = rssi;
+                sig.type = "WiFi";
+                sig.detectedAt = millis();
+                if(currentHeading > 0)
+                    sig.angle = currentHeading;
+                else
+                    sig.angle = random(0, 360); // Default to 0 if heading is not available
+                sig.latitude = currentLat;
+                sig.longitude = currentLon;
+                sig.manufacturer = mfg;
+                sig.deviceType = classifyDevice(ssid);
+                sig.uuid = bssid;
+                sig.extra = String(WiFi.channel(i));
+                sig.extra += "|" + String(WiFi.encryptionType(i)) + "|" + String(WiFi.RSSI(i)); 
 
-            add_or_update_detection(sig);
-        } else if(loggingUnknowns) {
-            String uniqueKey = "WiFi:" + bssid; 
-            if (unknownDeviceKeys.find(uniqueKey) == unknownDeviceKeys.end()) {
-                unknownDeviceKeys.insert(uniqueKey);
-        
-                File f = FFat.open("/unknown_devices.log", FILE_APPEND);
-                if (f) {
-                    if (f.size() > MAX_LOG_SIZE) {
-                        f.close();
-                        Serial.println("[LOG] Log file too big, truncating...");
+                Serial.println("[WiFi] " + ssid + " (" + sig.manufacturer + ") [" + sig.uuid + "] detected");
+
+                add_or_update_detection(sig);
+            } else if(loggingUnknowns) {
+                String uniqueKey = "WiFi:" + bssid; 
+                if (unknownDeviceKeys.find(uniqueKey) == unknownDeviceKeys.end()) {
+                    unknownDeviceKeys.insert(uniqueKey);
             
-                        FFat.remove("/unknown_devices.log"); // delete old
-                        f = FFat.open("/unknown_devices.log", FILE_WRITE); // start fresh
-                    }
+                    File f = FFat.open("/unknown_devices.log", FILE_APPEND);
+                    if (f) {
+                        if (f.size() > MAX_LOG_SIZE) {
+                            f.close();
+                            Serial.println("[LOG] Log file too big, truncating...");
+                
+                            FFat.remove("/unknown_devices.log"); // delete old
+                            f = FFat.open("/unknown_devices.log", FILE_WRITE); // start fresh
+                        }
 
-                    
-                    String extra = String(WiFi.channel(i));
-                    extra += "|" + String(WiFi.encryptionType(i)) + "|" + String(WiFi.RSSI(i));
-                    f.printf("%s,%s,%s,%d,%.6f,%.6f,%s\n", "WiFi", ssid, bssid,
-                             (int)rssi, currentLat, currentLon,extra);
-                    f.close();
-                    _watch->vibrate(30);
+                        
+                        String extra = String(WiFi.channel(i));
+                        extra += "|" + String(WiFi.encryptionType(i)) + "|" + String(WiFi.RSSI(i));
+                        f.printf("%s,%s,%s,%d,%.6f,%.6f,%s\n", "WiFi", ssid, bssid,
+                                (int)rssi, currentLat, currentLon,extra);
+                        f.close();
+                        _watch->vibrate(30);
+                    }
+                    Serial.println("[LOG] Unknown device recorded: " + ssid);
                 }
-                Serial.println("[LOG] Unknown device recorded: " + ssid);
             }
         }
     }
@@ -440,8 +445,8 @@ class RadarBLEScan : public NimBLEAdvertisedDeviceCallbacks {
 void detectBLE() {
     NimBLEScan* pScan = NimBLEDevice::getScan();
     pScan->setAdvertisedDeviceCallbacks(new RadarBLEScan(), false);
-    pScan->setActiveScan(true);
-    pScan->start(5, false);
+    pScan->setActiveScan(false);
+    pScan->start(5, nullptr, false);
 }
 
 void apply_pulse_animation(lv_obj_t* dot, lv_color_t color) {
@@ -667,8 +672,7 @@ void radar_loop(LilyGoLib* watch) {
     }
 
     if (last_scan_time == 0 || millis() - last_scan_time > 8000) {
-        
-        
+                
         //Serial.println("Updating heading.\n");
         update_current_heading();
         
@@ -689,7 +693,8 @@ void radar_loop(LilyGoLib* watch) {
             screenOn = true;
         }
 
-        draw_radar();
+        if(screenOn)
+            draw_radar();
       
         //Serial.println("Completed.");
         last_scan_time = millis();

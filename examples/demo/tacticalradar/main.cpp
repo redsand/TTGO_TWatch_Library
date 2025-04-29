@@ -66,7 +66,7 @@ void handle_serial_command(String cmd) {
 void setup() {
 
     pinMode(BUTTON_PIN, INPUT_PULLUP); 
-    
+
     Serial.begin(115200);
     Serial.println("Booting Watch...");
 
@@ -75,7 +75,7 @@ void setup() {
 
     pinMode(BOARD_TOUCH_INT, INPUT_PULLUP); 
 
-    WiFi.mode(WIFI_OFF);    // Save battery
+    WiFi.scanNetworks(true);
     NimBLEDevice::init(""); // BLE initialized
 
     if (!FFat.begin()) {
