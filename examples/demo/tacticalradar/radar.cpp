@@ -80,6 +80,23 @@ void draw_sweep() {
     lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
 }
 
+static void purgeOldDetections(uint32_t maxAgeMs = 60000) {
+    SignalSource tmp[50];
+    int newCtr = 0;
+    uint32_t now = millis();
+    for (int i = 0; i < detectionCtr; ++i) {
+        if (now - lastDetections[i].detectedAt <= maxAgeMs) {
+            tmp[newCtr++] = lastDetections[i];
+        }
+    }
+    // Copy survivors back
+    for (int i = 0; i < newCtr; ++i) {
+        lastDetections[i] = tmp[i];
+    }
+    detectionCtr = newCtr;
+    // Next write slot should wrap correctly
+    detectionIndex = detectionCtr % 50;
+}
 
 void save_detection(const SignalSource& sig) {
     // Save into circular buffer
@@ -405,8 +422,8 @@ class RadarBLEScan : public NimBLEAdvertisedDeviceCallbacks {
                         sig.angle = random(0, 360); // Default to 0 if heading is not available
                     sig.latitude = currentLat;
                     sig.longitude = currentLon;
-                    sig.manufacturer = mfg;
-                    sig.deviceType = classifyDevice(name);
+                    sig.manufacturer = vendor;
+                    sig.deviceType = deviceType;
                     
                     Serial.println("[BLE] " + name + " (" + sig.manufacturer + ") [" + sig.uuid + "] detected");
 
@@ -536,8 +553,8 @@ void draw_radar() {
         uint8_t opacity = LV_OPA_COVER;
 
         
-        /*if (age > max_age) continue;  // Skip very old detections
-        else*/ if (age > 30000)         // Between 15s and 30s: fade from 255 to ~60
+        if (age > max_age) continue;  // Skip very old detections
+        else if (age > 30000)         // Between 15s and 30s: fade from 255 to ~60
             opacity = map(age, 15000, max_age, LV_OPA_80, LV_OPA_30);
 
             // Dot
@@ -692,6 +709,8 @@ void radar_loop(LilyGoLib* watch) {
             lastTouchTime = millis();
             screenOn = true;
         }
+
+        purgeOldDetections(60000); // 60 seconds
 
         if(screenOn)
             draw_radar();
