@@ -382,7 +382,7 @@ void detectWiFi() {
                             type = "WiFi-5G";
                         else
                             type = "WiFi";
-                        f.printf("%s,%s,%s,%d,%d,%.6f,%.6f,%s\n", type.c_str(), ssid, bssid,
+                        f.printf("%s,%s,%s,%d,%d,%.6f,%.6f,%s\n", type.c_str(), ssid.c_str(), bssid.c_str(),
                                 (int)rssi, WiFi.channel(i), currentLat, currentLon,extra);
                         f.close();
                         _watch->vibrate(30);
