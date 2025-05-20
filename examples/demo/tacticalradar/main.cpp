@@ -20,6 +20,9 @@ void handle_serial_command(String cmd) {
             return;
         }
         Serial.println("=== Log Start ===");
+        
+
+        Serial.write("type, name, address, manufacturer, deviceType, rssi, channel, lat, lon, extra\n");
         while (f.available()) {
             Serial.write(f.read());
         }
@@ -33,6 +36,7 @@ void handle_serial_command(String cmd) {
             return;
         }
         Serial.println("=== Log Start ===");
+        Serial.write("type, name, address, rssi, channel, lat, lon, extra\n");
         while (f.available()) {
             Serial.write(f.read());
         }

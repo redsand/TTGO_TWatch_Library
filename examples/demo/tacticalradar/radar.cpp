@@ -6,13 +6,17 @@
 #include <QMC5883LCompass.h>
 #include <FFat.h>
 #include <set>
+#include <math.h>
+
 
 static LilyGoLib* _watch;
 
 static unsigned long last_scan_time = 0;
 static int detectionThreshold = -70;
 
-static SignalSource lastDetections[50];
+#define DETECTION_LIMIT 50
+
+static SignalSource lastDetections[DETECTION_LIMIT];
 static int detectionIndex = 0;
 static int detectionCtr = 0;
 
@@ -57,6 +61,36 @@ void gps_diagnostics();
 
 static int sweep_angle = 0;
 
+
+static constexpr double kEarthRadius = 6371000.0;
+
+// Haversine distance
+static double haversineDist(double lat1, double lon1, double lat2, double lon2) {
+  auto toRad = [](double deg){ return deg * M_PI / 180.0; };
+  double dLat = toRad(lat2 - lat1);
+  double dLon = toRad(lon2 - lon1);
+  lat1 = toRad(lat1);
+  lat2 = toRad(lat2);
+  double a = sin(dLat/2)*sin(dLat/2)
+           + sin(dLon/2)*sin(dLon/2)*cos(lat1)*cos(lat2);
+  double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+  return kEarthRadius * c;
+}
+
+// Initial bearing from (lat1,lon1) → (lat2,lon2), in degrees [0..360)
+static double bearingTo(double lat1, double lon1, double lat2, double lon2) {
+  auto toRad = [](double deg){ return deg * M_PI / 180.0; };
+  auto toDeg = [](double rad){ return rad * 180.0 / M_PI; };
+  lat1 = toRad(lat1);
+  lat2 = toRad(lat2);
+  double dLon = toRad(lon2 - lon1);
+  double y = sin(dLon)*cos(lat2);
+  double x = cos(lat1)*sin(lat2) - sin(lat1)*cos(lat2)*cos(dLon);
+  double brng = toDeg(atan2(y, x));
+  return fmod((brng + 360.0), 360.0);
+}
+// ----------------------------------------
+
 void draw_sweep() {
     int cx = 106;
     int cy = 106;
@@ -81,13 +115,13 @@ void draw_sweep() {
 }
 
 static void purgeOldDetections(uint32_t maxAgeMs = 60000) {
-    SignalSource tmp[50];
+    SignalSource tmp[DETECTION_LIMIT];
     int newCtr = 0;
     uint32_t now = millis();
     for (int i = 0; i < detectionCtr; ++i) {
         if (now - lastDetections[i].detectedAt <= maxAgeMs) {
             tmp[newCtr++] = lastDetections[i];
-        }
+        } else { Serial.println("Pruning signal entry: " + lastDetections[i].source); }
     }
     // Copy survivors back
     for (int i = 0; i < newCtr; ++i) {
@@ -95,15 +129,15 @@ static void purgeOldDetections(uint32_t maxAgeMs = 60000) {
     }
     detectionCtr = newCtr;
     // Next write slot should wrap correctly
-    detectionIndex = detectionCtr % 50;
+    detectionIndex = detectionCtr % DETECTION_LIMIT;
 }
 
 void save_detection(const SignalSource& sig) {
     // Save into circular buffer
     lastDetections[detectionIndex] = sig;
-    detectionIndex = (detectionIndex + 1) % 50;
+    detectionIndex = (detectionIndex + 1) % DETECTION_LIMIT;
     detectionCtr++;
-    if(detectionCtr >= 50) detectionCtr = 50;
+    if(detectionCtr >= DETECTION_LIMIT) detectionCtr = DETECTION_LIMIT;
 
 
 
@@ -119,9 +153,9 @@ void save_detection(const SignalSource& sig) {
             f = FFat.open("/detections.log", FILE_WRITE); // start fresh
         }
 
-        f.printf("%s,%s,%s,%s,%s,%d,%.6f,%.6f,%s\n", 
+        f.printf("%s,%s,%s,%s,%s,%d,%d,%.6f,%.6f,%s\n", 
                  sig.type.c_str(), sig.source.c_str(), sig.uuid.c_str(), sig.manufacturer.c_str(), sig.deviceType.c_str(), 
-                 (int)sig.strength, sig.latitude, sig.longitude, sig.extra.c_str());
+                 (int)sig.strength, sig.channel, sig.latitude, sig.longitude, sig.extra.c_str());
         f.close();
     }
 }
@@ -134,13 +168,13 @@ void add_or_update_detection(SignalSource sig) {
     int i;
     for(i=0; i < detectionCtr; i+=1) {
         SignalSource *existing = &lastDetections[i];
-        if (existing->source == sig.source && existing->type == sig.type && existing->uuid == sig.uuid) {
+        if (existing->source == sig.source && existing->channel == sig.channel && existing->type == sig.type && existing->uuid == sig.uuid) {
             // Update existing signal with latest info
             uint8_t normalized_strength = constrain(map(sig.strength, -100, -30, 255, 0), 0, 255);
             uint8_t prev_normalized_strength = constrain(map(existing->strength, -100, -30, 255, 0), 0, 255);
             
             if (normalized_strength <= 85 && prev_normalized_strength > 85) {
-                Serial.println("Signal strength dropped below threshold: " + sig.source);
+                Serial.println("Signal strength dropped below threshold: " + sig.source + " (" + normalized_strength + ") vs previous (" + prev_normalized_strength + ")");
                 _watch->vibrate(50);
             }
 
@@ -294,17 +328,21 @@ void detectWiFi() {
 
         for (int i = 0; i < n; ++i) {
             String ssid = WiFi.SSID(i);
-            String bssid = WiFi.BSSIDstr();
+            String bssid = WiFi.BSSIDstr(i);
             int32_t rssi = WiFi.RSSI(i);
             ssid.toLowerCase();
             String mfg = lookupManufacturer(bssid);
+            //Serial.println("SSID: " + ssid + " (" + bssid + ") RSSI: " + String(rssi) + " dBm Channel: " + String(WiFi.channel(i)));
             if ( ssid.startsWith("bl4ck") || ssid.startsWith("ydxj_") || ssid.startsWith("zednx") || ssid.startsWith("ds-mcw405") || ssid.indexOf("axon") != -1 || ssid.indexOf("vb400") != -1 || ssid.indexOf("taser") != -1 || mfg.length() != 0)
             {
-
                 SignalSource sig;
                 sig.source = ssid;
                 sig.strength = rssi;
-                sig.type = "WiFi";
+                sig.channel = WiFi.channel(i);
+                if(sig.channel == 0)
+                    sig.type = "WiFi-5G";
+                else
+                    sig.type = "WiFi";
                 sig.detectedAt = millis();
                 if(currentHeading > 0)
                     sig.angle = currentHeading;
@@ -339,8 +377,13 @@ void detectWiFi() {
                         
                         String extra = String(WiFi.channel(i));
                         extra += "|" + String(WiFi.encryptionType(i)) + "|" + String(WiFi.RSSI(i));
-                        f.printf("%s,%s,%s,%d,%.6f,%.6f,%s\n", "WiFi", ssid, bssid,
-                                (int)rssi, currentLat, currentLon,extra);
+                        String type;
+                        if(WiFi.channel(i) == 0)
+                            type = "WiFi-5G";
+                        else
+                            type = "WiFi";
+                        f.printf("%s,%s,%s,%d,%d,%.6f,%.6f,%s\n", type.c_str(), ssid, bssid,
+                                (int)rssi, WiFi.channel(i), currentLat, currentLon,extra);
                         f.close();
                         _watch->vibrate(30);
                     }
@@ -356,16 +399,19 @@ class RadarBLEScan : public NimBLEAdvertisedDeviceCallbacks {
     void onResult(NimBLEAdvertisedDevice* advertisedDevice) override {
         String name = advertisedDevice->getName().c_str();
         String address = advertisedDevice->getAddress().toString().c_str();
+        String uuid = advertisedDevice->getServiceUUID().toString().c_str();
+        String type = advertisedDevice->getServiceData().c_str();
         int rssi = advertisedDevice->getRSSI();
         name.toLowerCase();
         String mfg = lookupManufacturer(address);
-
+        //Serial.println("BLE Name: " + name + " (" + address + ") RSSI: " + String(rssi) + " UUID: " + uuid + " Type: " + type);
         if ( name.startsWith("ydxj") || name.indexOf("zednx") != -1 || name.indexOf("axon") != -1 || name.indexOf("vb400") != -1 || name.indexOf("taser") != -1 || mfg.length() != 0)
         {
             SignalSource sig;
             sig.source = name;
             sig.strength = rssi;
             sig.type = "BLE";
+            sig.channel = -1; // BLE doesn't have channels like WiFi
             sig.uuid = advertisedDevice->getAddress().toString().c_str();
             sig.detectedAt = millis();
             // sig.angle = currentHeading;
@@ -412,6 +458,7 @@ class RadarBLEScan : public NimBLEAdvertisedDeviceCallbacks {
                     sig.source = name;
                     sig.uuid = advertisedDevice->getAddress().toString().c_str();
                     sig.strength = rssi;
+                    sig.channel = -1; // BLE doesn't have channels like WiFi
                     sig.extra = advertisedDevice->getManufacturerData().c_str();
                     sig.type = "BLE";
                     sig.detectedAt = millis();
@@ -447,7 +494,7 @@ class RadarBLEScan : public NimBLEAdvertisedDeviceCallbacks {
                 }
 
                 String extra = advertisedDevice->getManufacturerData().c_str();
-                f.printf("%s,%s,%s,%d,%.6f,%.6f,%s\n", "WiFi", name, advertisedDevice->getAddress().toString().c_str(),
+                f.printf("%s,%s,%s,%d,-1,%.6f,%.6f,%s\n", "BLE", name, advertisedDevice->getAddress().toString().c_str(),
                              (int)rssi, currentLat, currentLon, extra);
                 f.close();
                 
@@ -513,7 +560,10 @@ void draw_radar() {
     int cx = 120;
     int cy = 120;
     int radius = 100;
-
+    double maxDist = 500.0; 
+    double maxDistWiFi = 150.0;   // meters
+    double maxDistBLE  =  50.0;   // meters
+    
     // Battery status
     uint16_t voltage = _watch->getBattVoltage();
     int batteryPercent = map(voltage, 3300, 4200, 0, 100);
@@ -538,15 +588,32 @@ void draw_radar() {
 
     // Serial.println("Drawing signals...");
     // Draw detected signals
-    int i;
+    int i, x, y;
     for(i=0; i < detectionCtr; i+=1) {
     //for (auto& sig : signals) {
-        SignalSource sig = lastDetections[i];
-        int strength_radius = map(sig.strength, -100, -30, radius, 0);
-        strength_radius = constrain(strength_radius, 0, radius);
-        float angle_rad = radians(sig.angle);
-        int x = cx + strength_radius * cos(angle_rad);
-        int y = cy + strength_radius * sin(angle_rad);
+        auto &sig = lastDetections[i];
+        if(sig.latitude != 0.0 && sig.longitude != 0.0) {
+        
+
+            double d = haversineDist(currentLat, currentLon, sig.latitude, sig.longitude);
+            double brg = bearingTo(currentLat, currentLon, sig.latitude, sig.longitude);
+    
+            double maxDist = (sig.type == "WiFi")
+            ? maxDistWiFi
+            : maxDistBLE;
+
+            double r = radius * min(d / maxDist, 1.0);
+            double ang = (brg - 90.0) * M_PI/180.0;  
+            x = cx + int(r * cos(ang));
+            y = cy + int(r * sin(ang));    
+    
+        } else {
+            int strength_radius = map(sig.strength, -100, -30, radius, 0);
+            strength_radius = constrain(strength_radius, 0, radius);
+            float angle_rad = radians(sig.angle);
+            x = cx + strength_radius * cos(angle_rad);
+            y = cy + strength_radius * sin(angle_rad);
+        }
 
         unsigned long age = millis() - sig.detectedAt;
         const unsigned long max_age = 60000; // 30 seconds before fading to nearly invisible
@@ -612,7 +679,7 @@ void draw_radar() {
     lv_obj_align(gps_icon, LV_ALIGN_TOP_LEFT, 1, 0);
     
     
-    Serial.println("Creating logging icon");
+    //Serial.println("Creating logging icon");
     logging_icon = lv_label_create(radar_screen);
     
     lv_label_set_text(logging_icon, LV_SYMBOL_EDIT); // example symbol
@@ -666,7 +733,7 @@ void gps_diagnostics() {
 
 unsigned long lastTouchTimeForSequence = 0;
 int touchCount = 0;
-const int REQUIRED_TOUCHES = 5;
+const int REQUIRED_TOUCHES = 10;
 const unsigned long TOUCH_SEQUENCE_TIMEOUT = 2000; // 2 seconds
 
 
@@ -677,6 +744,22 @@ void radar_setup(LilyGoLib* watch) {
     gps_reset();
 
     compass_setup();
+
+    // write unknown log
+
+    File f = FFat.open("/unknown_devices.log", FILE_READ);
+    if (!f) {
+        Serial.println("[ERROR] Cannot open log file.");
+        return;
+    }
+    Serial.println("=== Log Start ===");
+    
+    Serial.write("type, name, address, rssi, channel, lat, lon, extra\n");
+    while (f.available()) {
+        Serial.write(f.read());    
+    }
+    Serial.println("\n=== Log End ===");
+    f.close();
 }
 
 

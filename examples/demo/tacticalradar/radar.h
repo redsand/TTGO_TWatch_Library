@@ -11,6 +11,7 @@ struct SignalSource {
     String source;        // SSID or BLE name
     String uuid;         // mac or ble address
     float strength;       // RSSI
+    int channel;        // WiFi channel (1-14) , 0 for 5G and -1 for BLE
     String type;          // "WiFi" or "BLE"
     unsigned long detectedAt;  // millis() timestamp
     float angle;          // Angle in degrees (0-360)
