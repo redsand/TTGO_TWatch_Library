@@ -170,14 +170,17 @@ void add_or_update_detection(SignalSource sig) {
         SignalSource *existing = &lastDetections[i];
         if (existing->source == sig.source && existing->channel == sig.channel && existing->type == sig.type && existing->uuid == sig.uuid) {
             // Update existing signal with latest info
-            uint8_t normalized_strength = constrain(map(sig.strength, -100, -30, 255, 0), 0, 255);
-            uint8_t prev_normalized_strength = constrain(map(existing->strength, -100, -30, 255, 0), 0, 255);
+            
+            uint8_t normalized_strength = constrain(map(sig.strength, -100, -30, 0, 255), 0, 255);
+            uint8_t prev_normalized_strength = constrain(map(existing->strength, -100, -30, 0, 255), 0, 255);
             
             if (normalized_strength <= 85 && prev_normalized_strength > 85) {
                 Serial.println("Signal strength dropped below threshold: " + sig.source + " (" + normalized_strength + ") vs previous (" + prev_normalized_strength + ")");
                 _watch->vibrate(50);
+            } else {
+                Serial.println("Signal strength updated: " + sig.source + " (" + normalized_strength + ") vs previous (" + prev_normalized_strength + ")"); 
             }
-
+            
             existing->strength = sig.strength;
             existing->latitude = sig.latitude;
             existing->longitude = sig.longitude;
@@ -321,8 +324,8 @@ String classifyDevice(String name) {
 
 // ---- Detection ----
 void detectWiFi() {
-    //int n = WiFi.scanNetworks();
-    int n = WiFi.scanComplete();
+    int n = WiFi.scanNetworks();
+    //int n = WiFi.scanComplete();
     if (n != WIFI_SCAN_RUNNING) {
     // scan finished, process results
 
@@ -339,7 +342,7 @@ void detectWiFi() {
                 sig.source = ssid;
                 sig.strength = rssi;
                 sig.channel = WiFi.channel(i);
-                if(sig.channel == 0)
+                if(sig.channel > 14)
                     sig.type = "WiFi-5G";
                 else
                     sig.type = "WiFi";
@@ -634,14 +637,14 @@ void draw_radar() {
         //lv_obj_set_style_shadow_width(dot, 0, LV_PART_MAIN);
         lv_obj_set_style_outline_width(dot, 0, LV_PART_MAIN);
 
-        uint8_t normalized_strength = constrain(map(sig.strength, -100, -30, 255, 0), 0, 255);
+        uint8_t normalized_strength = constrain(map(sig.strength, -100, -30, 0, 255), 0, 255);
         lv_color_t color;
         if (normalized_strength > 170) {
-            color = lv_palette_main(LV_PALETTE_GREEN);
+            color = lv_palette_main(LV_PALETTE_RED);
         } else if (normalized_strength > 85) {
             color = lv_palette_main(LV_PALETTE_YELLOW);
         } else {
-            color = lv_palette_main(LV_PALETTE_RED);
+            color = lv_palette_main(LV_PALETTE_GREEN);
         }
         lv_obj_set_style_bg_color(dot, color, LV_PART_MAIN);   
         lv_obj_set_style_border_color(dot, color, LV_PART_MAIN);
